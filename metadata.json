@@ -1,0 +1,6 @@
+{
+  "name": "Gerenciador de Landing Pages e Leads",
+  "description": "Sistema completo para gerenciar landing pages, gerar scripts de rastreamento de analytics (visitas, cliques, scroll, quiz) e visualizar leads em tempo real integrado ao MySQL.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
