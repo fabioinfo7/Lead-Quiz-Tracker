@@ -22,7 +22,6 @@ const PORT = 3000;
 
 app.use(express.json());
 
-// Set up CORS headers
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, PATCH, DELETE');
@@ -33,13 +32,11 @@ app.use((req, res, next) => {
   next();
 });
 
-// Primary Endpoint: Database Status
 app.get('/api/status', (req, res) => {
   const status = getDbStatus();
   res.json(status);
 });
 
-// Update Database Settings dynamically from UI
 app.post('/api/config', async (req, res) => {
   const { host, user, database, port, password } = req.body;
   if (!host || !user || !database) {
@@ -56,7 +53,6 @@ app.post('/api/config', async (req, res) => {
   res.json({ success, status });
 });
 
-// Campaigns - Get all
 app.get('/api/campaigns', async (req, res) => {
   try {
     const campaigns = await getCampaigns();
@@ -66,11 +62,10 @@ app.get('/api/campaigns', async (req, res) => {
   }
 });
 
-// Campaigns - Create new
 app.post('/api/campaigns', async (req, res) => {
   const { name, product_name } = req.body;
   if (!name || !product_name) {
-    return res.status(400).json({ error: 'Nome da campanha e nome da isca digital / produto são obrigatórios.' });
+    return res.status(400).json({ error: 'Nome da campanha e nome do produto são obrigatórios.' });
   }
   const id = 'camp_' + Math.random().toString(36).substring(2, 9);
   const newCampaign = {
@@ -87,7 +82,6 @@ app.post('/api/campaigns', async (req, res) => {
   }
 });
 
-// Leads - Get all
 app.get('/api/leads', async (req, res) => {
   try {
     const leads = await getLeads();
@@ -97,11 +91,25 @@ app.get('/api/leads', async (req, res) => {
   }
 });
 
-// Leads - Submit lead (Quiz Form and User Info)
+// FIX: Endpoint de leads agora valida campaign_id contra campanhas existentes
 app.post('/api/leads', async (req, res) => {
   const { campaign_id, name, email, age, quiz_answers, session_id } = req.body;
   if (!campaign_id || !email) {
     return res.status(400).json({ error: 'campaign_id e email são obrigatórios.' });
+  }
+
+  // FIX: Verifica se a campanha existe antes de gravar o lead
+  try {
+    const campaigns = await getCampaigns();
+    const campaignExists = campaigns.some(c => c.id === campaign_id);
+    if (!campaignExists) {
+      return res.status(404).json({ 
+        error: `Campanha "${campaign_id}" não encontrada. Crie a campanha no painel antes de receber leads, e use o campaign_id gerado no pixel da landing page.` 
+      });
+    }
+  } catch (err: any) {
+    // Se não conseguir checar, continua mesmo assim (evita bloquear o lead)
+    console.warn('[Leads] Não foi possível validar campaign_id:', err.message);
   }
 
   const leadId = 'lead_' + Math.random().toString(36).substring(2, 11);
@@ -117,8 +125,7 @@ app.post('/api/leads', async (req, res) => {
 
   try {
     await createLead(newLead);
-    
-    // Track submission event
+
     if (session_id) {
       await trackEvent({
         id: 'ev_' + Math.random().toString(36).substring(2, 11),
@@ -136,7 +143,6 @@ app.post('/api/leads', async (req, res) => {
   }
 });
 
-// Analytics - Track Event
 app.post('/api/track', async (req, res) => {
   const { campaign_id, event_type, scroll_percentage, session_id } = req.body;
   if (!campaign_id || !event_type || !session_id) {
@@ -160,7 +166,6 @@ app.post('/api/track', async (req, res) => {
   }
 });
 
-// Analytics - Get Overall Summary
 app.get('/api/analytics', async (req, res) => {
   try {
     const summary = await getAnalytics();
@@ -170,29 +175,25 @@ app.get('/api/analytics', async (req, res) => {
   }
 });
 
-// Gemini Analysis of Quiz Answers
 app.post('/api/campaigns/:id/analyze', async (req, res) => {
   const campaignId = req.params.id;
   try {
-    // 1. Get all campaigns to find the campaign name and product
     const campaigns = await getCampaigns();
     const campaign = campaigns.find(c => c.id === campaignId);
     if (!campaign) {
       return res.status(404).json({ error: 'Campanha não encontrada.' });
     }
 
-    // 2. Fetch all leads
     const allLeads = await getLeads();
     const campaignLeads = allLeads.filter(l => l.campaign_id === campaignId);
 
     if (campaignLeads.length === 0) {
       return res.json({
         canAnalyze: false,
-        message: 'Nenhum lead cadastrado nesta campanha para analisar ainda. Quando houver leads com respostas, a IA gerará insights profundos!'
+        message: 'Nenhum lead cadastrado nesta campanha para analisar ainda.'
       });
     }
 
-    // 3. Compile all quiz questions and answers
     let quizCompilationText = '';
     campaignLeads.forEach((lead, index) => {
       quizCompilationText += `Lead #${index + 1} (${lead.name}, ${lead.age} anos):\n`;
@@ -202,20 +203,14 @@ app.post('/api/campaigns/:id/analyze', async (req, res) => {
       quizCompilationText += `\n`;
     });
 
-    // 4. Initialize Gemini
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
-      return res.status(500).json({ error: 'Chave GEMINI_API_KEY não configurada nas variáveis de ambiente do servidor.' });
+      return res.status(500).json({ error: 'GEMINI_API_KEY não configurada.' });
     }
 
-    console.log('[AI] Solicitando análise no modelo gemini-3.5-flash com compiler answers...');
     const ai = new GoogleGenAI({
       apiKey,
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build',
-        }
-      }
+      httpOptions: { headers: { 'User-Agent': 'aistudio-build' } }
     });
 
     const prompt = `
@@ -235,81 +230,64 @@ Gere um mapeamento ultra-estruturado, inteligente e perspicaz em português cont
 - Como essas dores afetam o dia a dia delas? (Agite a dor de forma profunda e realista).
 
 ## 2. Ideias de Infoprodutos Estratégicos para Curar as Dores Mapeadas
-Apresente ideias altamente lucrativas de infoprodutos criados especificamente para suprir as dores coletadas nas respostas:
 
 ### A. Produtos Categoria Black (Carga Forte / Promessa Provocativa e Alta Transformação)
-- Desenvolva **2 ideias de infoprodutos do tipo "Black"** (com copys de altíssimo apelo, ganchos de curiosidade irresistíveis, alta percepção de valor, promessas fortes de grande impacto financeiro, de tempo ou status para cura imediata da dor).
-- Para cada um, defina: **Nome Sugerido**, **Formato** (Ex: VSL + Kit Secreto, Desafio Gravado, Funil de 3 Dias), **A Grande Promessa (Big Idea)** e o **Mecanismo de Desejo Agitado**.
+- Desenvolva **2 ideias de infoprodutos do tipo "Black"**.
+- Para cada um, defina: **Nome Sugerido**, **Formato**, **A Grande Promessa (Big Idea)** e o **Mecanismo de Desejo Agitado**.
 
 ### B. Produtos Categoria Simples / White (Conformidade Total / Entrada Facilitada e Segura)
-- Desenvolva **2 ideias de infoprodutos do tipo "White/Simples"** (produtos fáceis de anunciar em qualquer plataforma sem risco de bloqueio, focados em soluções passo a passo, templates práticos de simples execução, ferramentas ou guias instrucionais simples).
-- Para cada um, defina: **Nome Sugerido**, **Formato** (Ex: Checklist, Coleção de Modelos, Minicurso em Clipes), **A Promessa Prática** e **Vantagem de Entrada**.
+- Desenvolva **2 ideias de infoprodutos do tipo "White/Simples"**.
+- Para cada um, defina: **Nome Sugerido**, **Formato**, **A Promessa Prática** e **Vantagem de Entrada**.
 
 ## 3. Copies Poderosas de Vendas (Neuromarketing de Extrema Persuasão)
-Crie copies que literalmente convertem leitores em compradores agitando as dores informadas:
 
 ### ⚡ LP Copy: Carta de Vendas Curta e Persuasiva (Framework AIDA / Agitação de Dor)
-- Escreva uma estrutura completa de venda (Headline, Gancho, Agitação da Dor Real que os leads citaram no quiz, Introdução da Solução via ${campaign.product_name} ou produto sugerido, Quebra de Objeções Técnica e Chamada para Ação irresistível).
+- Escreva uma estrutura completa de venda.
 
 ### ⚡ Sequência de E-mail de Vendas no Estilo "Injeção de Caixa de 48 Horas"
-- Escreva **2 e-mails de vendas** de tiro rápido, focados puramente na dor mencionada nas respostas, usando ganchos de urgência e quebra de padrão.
+- Escreva **2 e-mails de vendas** de tiro rápido.
 
-## 4. Modelos de Anúncios de Alta Conversão para Meta Ads (Facebook / Instagram Ads)
-Crie **5 modelos fortes de anúncios de alta conversão completos** estruturados com diferentes técnicas consagradas de storytelling, gatilhos mentais e formatos de atração (ex: Quebra de Padrão, Dor x Prazer, Curiosidade Infinita, História de Superação de Obstáculo Operacional, Autoridade Expressa).
-
-Para cada um dos 5 modelos, descreva de forma didática e estruturada:
-- **Modelo de Atração e Persuasão**: (Ex: Modelo #1 - Gancho de Curiosidade Máximo, Modelo #2 - Quebra de Padrão Irracional, Modelo #3 - Dor x Prazer, etc.)
-- **Técnica / Gatilho Mental Focado**: (Ex: Urgência e Prova de Conceito)
-- **Headline Forte (Título do Criativo na Imagem/Vídeo)**: (Texto curto e impactante)
-- **Texto Principal (Copy do Corpo do Anúncio / Primary Text)**: (Uma copy persuasiva, agitando a dor real extraída do quiz, agredindo a inércia e chamando para a solução com maestria)
-- **Título do Link (Headline do Botão)**: (Texto de até 40 caracteres chamando para clique)
-- **Descrição**: (Texto explicativo discreto que fica abaixo do título do link)
-- **Chamada para Ação (CTA indicado)**: (Ex: "Saiba mais", "Cadastrar-se", "Baixar")
+## 4. Modelos de Anúncios de Alta Conversão para Meta Ads
+Crie **5 modelos fortes de anúncios de alta conversão completos**.
 
 ## 5. Trio de Headlines de Elite para Teste A/B/C
-- 3 Headlines magnéticas e com alto apelo de clique/leitura focadas em agitar as respostas mais emblemáticas encontradas nas pesquisas.
+- 3 Headlines magnéticas.
 
-Trabalhe com o mais refinado vocabulário de copywriting de alta conversão. Formate toda a resposta de forma limpa, direta, visualmente deslumbrante em Markdown, ideal para o usuário ler, copiar e aplicar no seu negócio imediatamente.
+Formate toda a resposta em Markdown limpo e direto.
     `;
 
     const response = await ai.models.generateContent({
-      model: 'gemini-3.5-flash',
+      model: 'gemini-2.0-flash',
       contents: prompt,
     });
 
-    res.json({
-      canAnalyze: true,
-      analysis: response.text
-    });
+    res.json({ canAnalyze: true, analysis: response.text });
 
   } catch (err: any) {
-    console.error('[AI] Erro no Gemini:', err);
-    res.status(500).json({ error: 'Erro ao gerar análise da IA: ' + err.message });
+    console.error('[AI] Erro:', err);
+    res.status(500).json({ error: 'Erro ao gerar análise: ' + err.message });
   }
 });
 
-// Dynamic Client Tracker Script Renderer (supporting /tracker.js and /pixel.js to bypass adblockers)
+// FIX: Serve tanto /tracker.js quanto /pixel.js (ambos funcionam)
 app.get(['/tracker.js', '/pixel.js'], (req, res) => {
   const cid = req.query.cid || '';
-  // Resolve host dynamically or fallback (using x-forwarded-proto from SSL proxies)
   const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'https';
   const appUrl = process.env.APP_URL || `${protocol}://${req.get('host')}`;
   
   res.setHeader('Content-Type', 'application/javascript');
   res.send(`/**
- * Lead Quiz Tracking script v1.1.0
- * Gerado em conformidade com o sistema de Landing Page Analytics.
+ * Lead Quiz Tracking script v1.2.0 — CORRIGIDO
  */
 (function() {
   var campaignId = "${cid}";
   var serverUrl = "${appUrl}";
   
   if (!campaignId) {
-    console.error("[Tracker] Erro: Campaign ID (cid) ausente no script.");
+    console.error("[Tracker] Erro: Campaign ID (cid) ausente no script. Passe ?cid=SEU_CAMPAIGN_ID");
     return;
   }
   
-  // Create / Fetch Unique Visitor Session
   var sessionId = localStorage.getItem('lead_tracker_sess_id');
   if (!sessionId) {
     sessionId = 'sess_' + Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
@@ -317,27 +295,22 @@ app.get(['/tracker.js', '/pixel.js'], (req, res) => {
   }
   
   function sendTrackEvent(type, payload) {
-    var body = {
-      campaign_id: campaignId,
-      event_type: type,
-      session_id: sessionId,
-      scroll_percentage: payload && payload.scroll_percentage ? payload.scroll_percentage : 0
-    };
-    
-    // Use standard Fetch API post with no-cors or standard headers
     fetch(serverUrl + '/api/track', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
+      body: JSON.stringify({
+        campaign_id: campaignId,
+        event_type: type,
+        session_id: sessionId,
+        scroll_percentage: payload && payload.scroll_percentage ? payload.scroll_percentage : 0
+      })
     }).catch(function(e) {
-      console.warn('[Tracker] Failed tracking event:', e);
+      console.warn('[Tracker] Falha no evento de tracking:', e);
     });
   }
   
-  // Track direct page load / visit event
   sendTrackEvent('visit');
   
-  // Track scroll depth at 25%, 50%, 75%, 100%
   var scrollBenchmarks = [25, 50, 75, 100];
   var hitBenchmarks = {};
   
@@ -345,9 +318,7 @@ app.get(['/tracker.js', '/pixel.js'], (req, res) => {
     var scrollTop = window.scrollY || document.documentElement.scrollTop;
     var scrollHeight = document.documentElement.scrollHeight - document.documentElement.clientHeight;
     if (scrollHeight <= 0) return;
-    
     var currentPct = Math.min(100, Math.round((scrollTop / scrollHeight) * 100));
-    
     scrollBenchmarks.forEach(function(mark) {
       if (currentPct >= mark && !hitBenchmarks[mark]) {
         hitBenchmarks[mark] = true;
@@ -356,55 +327,56 @@ app.get(['/tracker.js', '/pixel.js'], (req, res) => {
     });
   });
   
-  // Listen for generic button click triggers for CTA clicks
   document.addEventListener('click', function(e) {
     var element = e.target;
     if (!element) return;
-    
     var isCta = element.closest('[data-tracker-cta]') || 
                 element.closest('#cta-button') || 
                 element.closest('.cta-button') || 
                 element.closest('a[href*="#quiz"]') || 
                 element.tagName === 'BUTTON';
-                
     if (isCta) {
       sendTrackEvent('cta_click');
     }
   });
   
-  // Attach safe LeadTracker utility global to allow manually dispatching leads
   var previousLeadTracker = window.LeadTracker;
   window.LeadTracker = {
     trackCta: function() {
       sendTrackEvent('cta_click');
     },
+    // FIX: submitLead agora inclui campaign_id automaticamente a partir do cid do pixel
     submitLead: function(leadData) {
-      var name = leadData.name;
-      var email = leadData.email;
-      var age = leadData.age;
-      var answers = leadData.quiz_answers || leadData.quizAnswers || [];
-      
       return fetch(serverUrl + '/api/leads', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           campaign_id: campaignId,
-          name: name,
-          email: email,
-          age: parseInt(age, 10) || 0,
-          quiz_answers: answers,
+          name: leadData.name,
+          email: leadData.email,
+          age: parseInt(leadData.age, 10) || 0,
+          quiz_answers: leadData.quiz_answers || leadData.quizAnswers || [],
           session_id: sessionId
         })
       })
       .then(function(r) { return r.json(); })
       .then(function(res) {
-        sendTrackEvent('submit');
+        if (res.error) {
+          console.error('[Tracker] Erro ao salvar lead:', res.error);
+        } else {
+          sendTrackEvent('submit');
+          console.log('[Tracker] Lead salvo com sucesso!', res);
+        }
         return res;
+      })
+      .catch(function(err) {
+        console.error('[Tracker] Falha de rede ao salvar lead:', err);
+        throw err;
       });
     }
   };
 
-  // Process queued events if LeadTracker was initialized early
+  // Processa fila de eventos emitidos antes do pixel carregar
   if (previousLeadTracker && previousLeadTracker._q) {
     previousLeadTracker._q.forEach(function(item) {
       if (item.data) {
@@ -417,14 +389,13 @@ app.get(['/tracker.js', '/pixel.js'], (req, res) => {
     });
   }
   
-  console.log("[Tracker] Inicializado com sucesso para campanha: " + campaignId);
+  console.log("[Tracker v1.2] Inicializado para campanha: " + campaignId + " | Server: " + serverUrl);
 })();`);
 });
 
-// Configure Vite dynamic middleware or fallback to build folder
 async function startServer() {
   const success = await initDb();
-  console.log(`[DB] Database initialization completed. MySQL connected: ${!success ? 'FALLBACK LOCAL ACTIVE' : 'YES'}`);
+  console.log(`[DB] Inicialização concluída. MySQL: ${success ? 'CONECTADO' : 'FALLBACK LOCAL ATIVO'}`);
 
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
@@ -441,7 +412,7 @@ async function startServer() {
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`[Server] running on http://0.0.0.0:${PORT}`);
+    console.log(`[Server] Rodando em http://0.0.0.0:${PORT}`);
   });
 }
 
