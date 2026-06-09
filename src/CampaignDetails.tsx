@@ -46,9 +46,18 @@ export function DbSettingsTab({ currentStatus, onSave }: DbSettingsTabProps) {
       });
       setPassword(''); // Clear the password input for security
     } else {
+      // Busca o erro detalhado do servidor para mostrar ao usuário
+      let errorDetail = '';
+      try {
+        const statusRes = await fetch('/api/status');
+        if (statusRes.ok) {
+          const s = await statusRes.json();
+          if (s.error) errorDetail = s.error;
+        }
+      } catch {}
       setSaveResult({
         success: false,
-        message: 'Falha ao conectar no banco MySQL externo com as credenciais especificadas. O sistema continuará operando normalmente em fallback local de contingência.'
+        message: errorDetail || 'Falha ao conectar no banco MySQL externo com as credenciais especificadas. O sistema continuará operando normalmente em fallback local de contingência.'
       });
     }
   };
