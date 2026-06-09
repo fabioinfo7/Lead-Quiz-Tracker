@@ -1,243 +1,236 @@
 import React, { useState } from 'react';
-import { Campaign, Lead } from '../types';
-import { Sparkles, RefreshCw, Copy, Check, MessageSquareCode, Flame, HelpCircle } from 'lucide-react';
+import { DatabaseConfig } from '../types';
+import { Database, Save, CheckCircle, AlertTriangle, Key, Terminal, ShieldAlert } from 'lucide-react';
 
-interface CopyCreatorProps {
-  campaigns: Campaign[];
-  leads: Lead[];
+interface DbSettingsTabProps {
+  currentStatus: {
+    isUsingFallback: boolean;
+    error: string;
+    host: string;
+    user: string;
+    database: string;
+    port: number;
+  };
+  onSave: (config: DatabaseConfig & { password?: string }) => Promise<boolean>;
 }
 
-export function CopyCreator({ campaigns, leads }: CopyCreatorProps) {
-  const [selectedCampaignId, setSelectedCampaignId] = useState<string | null>(campaigns[0]?.id || null);
-  const [loading, setLoading] = useState(false);
-  const [copied, setCopied] = useState(false);
-  const [aiResponse, setAiResponse] = useState<string | null>(null);
-  const [errorMess, setErrorMess] = useState('');
+export function DbSettingsTab({ currentStatus, onSave }: DbSettingsTabProps) {
+  const [host, setHost] = useState(currentStatus.host);
+  const [user, setUser] = useState(currentStatus.user);
+  const [database, setDatabase] = useState(currentStatus.database);
+  const [port, setPort] = useState(currentStatus.port);
+  const [password, setPassword] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [saveResult, setSaveResult] = useState<{ success: boolean; message: string } | null>(null);
 
-  const selectedCampaign = campaigns.find(c => c.id === selectedCampaignId) || campaigns[0];
-  const campaignLeads = leads.filter(l => l.campaign_id === selectedCampaign?.id);
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    setSaveResult(null);
 
-  const triggerAnalysis = async () => {
-    if (!selectedCampaign) return;
-    setLoading(true);
-    setErrorMess('');
-    setAiResponse(null);
-    try {
-      const response = await fetch(`/api/campaigns/${selectedCampaign.id}/analyze`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        }
+    // If the user inputs empty password, they might want to leave it empty or use existing.
+    // In any case, we want to capture their entry.
+    const result = await onSave({
+      host,
+      user,
+      database,
+      port,
+      password: password || undefined
+    });
+
+    setSaving(false);
+    if (result) {
+      setSaveResult({
+        success: true,
+        message: 'Configurações salvas e conexão remota estabelecida com sucesso!'
       });
-      const data = await response.json();
-      if (response.ok) {
-        if (data.canAnalyze) {
-          setAiResponse(data.analysis);
-        } else {
-          setErrorMess(data.message);
+      setPassword(''); // Clear the password input for security
+    } else {
+      // Busca o erro detalhado do servidor para mostrar ao usuário
+      let errorDetail = '';
+      try {
+        const statusRes = await fetch('/api/status');
+        if (statusRes.ok) {
+          const s = await statusRes.json();
+          if (s.error) errorDetail = s.error;
         }
-      } else {
-        setErrorMess(data.error || 'Erro ao realizar análise.');
-      }
-    } catch (err: any) {
-      setErrorMess(err.message || 'Erro inesperado ao conectar com o servidor.');
-    } finally {
-      setLoading(false);
+      } catch {}
+      setSaveResult({
+        success: false,
+        message: errorDetail || 'Falha ao conectar no banco MySQL externo com as credenciais especificadas. O sistema continuará operando normalmente em fallback local de contingência.'
+      });
     }
   };
 
-  const copyResult = () => {
-    if (!aiResponse) return;
-    navigator.clipboard.writeText(aiResponse);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  // Beautiful render helper for raw Markdown
-  const renderMarkdown = (text: string) => {
-    const lines = text.split('\n');
-    return (
-      <div className="space-y-4 text-xs text-[#1A1A1A] leading-relaxed font-sans">
-        {lines.map((line, idx) => {
-          // Headers
-          if (line.startsWith('### ')) {
-            return <h4 key={idx} className="font-serif text-sm font-semibold text-[#1A1A1A] mt-5 mb-2.5 flex items-center gap-1.5 border-b border-[#E5E2DD] pb-1.5">{line.replace('### ', '')}</h4>;
-          }
-          if (line.startsWith('## ')) {
-            return <h3 key={idx} className="font-serif text-base font-bold text-[#FF6321] mt-6 mb-3 flex items-center gap-1.5 border-b border-[#E5E2DD]/80 pb-2">{line.replace('## ', '')}</h3>;
-          }
-          if (line.startsWith('# ')) {
-            return <h2 key={idx} className="font-serif text-lg font-extrabold text-[#1A1A1A] mt-8 mb-4 border-b border-[#E5E2DD] pb-2.5">{line.replace('# ', '')}</h2>;
-          }
-          
-          // Lists
-          if (line.startsWith('- ') || line.startsWith('* ')) {
-            const cleanContent = line.substring(2);
-            return (
-              <ul key={idx} className="list-disc pl-5 space-y-1.5">
-                <li>{parseInlineBold(cleanContent)}</li>
-              </ul>
-            );
-          }
-          if (/^\d+\.\s/.test(line)) {
-            const cleanContent = line.replace(/^\d+\.\s/, '');
-            return (
-              <ol key={idx} className="list-decimal pl-5 space-y-1.5">
-                <li>{parseInlineBold(cleanContent)}</li>
-              </ol>
-            );
-          }
-
-          // Plain text helper
-          if (line.trim() === '') return <div key={idx} className="h-2"></div>;
-
-          return <p key={idx} className="p-0.5">{parseInlineBold(line)}</p>;
-        })}
-      </div>
-    );
-  };
-
-  // Helper to highlight **bold text**
-  const parseInlineBold = (text: string) => {
-    const parts = text.split('**');
-    return parts.map((part, i) => {
-      if (i % 2 === 1) {
-        return <strong key={i} className="text-[#FF6321] font-bold bg-[#FF6321]/5 px-1.5 py-0.5 rounded border border-[#FF6321]/15 font-mono">{part}</strong>;
-      }
-      return part;
-    });
-  };
-
   return (
-    <div className="space-y-6">
-      <div className="bg-white border border-[#E5E2DD] rounded-2xl shadow-sm p-6 text-[#1A1A1A]">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4 border-b border-[#E5E2DD] pb-4.5">
+    <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 text-[#1A1A1A]">
+      {/* Left panel: Connection status and notes */}
+      <div className="lg:col-span-4 space-y-6">
+        <div className="bg-white border border-[#E5E2DD] p-6 rounded-2xl shadow-sm text-[#1A1A1A] space-y-4">
           <div className="space-y-1">
-            <h3 className="font-serif text-lg italic text-[#1A1A1A] flex items-center gap-2">
-              <Sparkles className="w-5 h-5 text-[#FF6321]" />
-              Copywriting de Elite com Gemini AI
+            <h3 className="font-serif text-base italic text-[#1A1A1A] font-bold flex items-center gap-2">
+              <Database className="w-4 h-4 text-[#FF6321]" />
+              Conexão MySQL
             </h3>
-            <p className="text-xs text-gray-500 italic">
-              Analise as respostas coletadas no quiz para mapear as dores reais do seu público e estruturar sua comunicação de vendas.
+            <p className="text-xs text-gray-405 italic">
+              Conecte a plataforma diretamente ao seu servidor MySQL para armazenar campanhas, visitas e leads com segurança redundante.
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2 shrink-0">
-            <select
-              value={selectedCampaignId || ''}
-              onChange={(e) => {
-                setSelectedCampaignId(e.target.value);
-                setAiResponse(null);
-                setErrorMess('');
-              }}
-              className="bg-white border border-[#E5E2DD] focus:border-[#FF6321] text-xs text-[#1A1A1A] rounded-xl px-3.5 py-2.5 outline-none font-sans font-medium shadow-sm cursor-pointer"
-            >
-              {campaigns.map(c => (
-                <option key={c.id} value={c.id}>{c.name}</option>
-              ))}
-            </select>
-
-            <button
-              onClick={triggerAnalysis}
-              disabled={loading || !selectedCampaign || campaignLeads.length === 0}
-              className="bg-[#1A1A1A] hover:bg-[#1A1A1A]/90 disabled:bg-gray-200 disabled:text-gray-400 text-white font-semibold text-xs py-3 px-5 rounded-full transition-all flex items-center gap-1.5 cursor-pointer uppercase tracking-widest shadow-sm"
-            >
-              {loading ? (
-                <>
-                  <RefreshCw className="w-4 h-4 animate-spin text-[#FF6321]" />
-                  Analisando...
-                </>
-              ) : (
-                <>
-                  <Sparkles className="w-4 h-4 text-[#FF6321]" />
-                  Criar Copy & Validar Dor
-                </>
-              )}
-            </button>
-          </div>
-        </div>
-
-        {/* Selected Campaign Summary */}
-        {selectedCampaign && (
-          <div className="p-3 bg-[#F5F2ED] border border-[#E5E2DD] rounded-xl flex flex-wrap items-center justify-between gap-3 text-xs shadow-inner">
-            <div className="flex gap-2 items-center">
-              <Flame className="w-4 h-4 text-[#FF6321]" />
-              <span className="text-gray-600">Produto Principal: <strong className="text-[#1A1A1A]">{selectedCampaign.product_name}</strong></span>
-            </div>
-            <div className="font-mono text-gray-550 flex gap-3 text-[10px]">
-              <span>Leads com Respostas: <strong className="text-[#FF6321] font-bold">{campaignLeads.length}</strong></span>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Main Analysis Display Card */}
-      <div className="bg-white border border-[#E5E2DD] rounded-2xl p-6 min-h-[300px] flex flex-col justify-between shadow-sm text-[#1A1A1A]">
-        {loading ? (
-          <div className="flex-1 flex flex-col items-center justify-center py-16 space-y-4">
-            <div className="p-3 bg-[#FF6321]/15 text-[#FF6321] rounded-full animate-pulse border border-[#FF6321]/20">
-              <Sparkles className="w-8 h-8" />
-            </div>
-            <div className="text-center space-y-1">
-              <h4 className="font-serif text-base italic text-[#1A1A1A]">Gemini está lapidando suas dores...</h4>
-              <p className="text-xs text-gray-500 italic max-w-sm">
-                A IA está cruzando todas as respostas do seu Leads Quiz para validar o produto e digitar uma copy de altíssimo impacto.
+          <div className="border-t border-[#E5E2DD] pt-4 space-y-4">
+            <div className={`p-4 rounded-xl border flex flex-col gap-2 ${
+              currentStatus.isUsingFallback 
+                ? 'bg-amber-500/10 border-amber-500/20 text-amber-900' 
+                : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-900'
+            }`}>
+              <div className="flex items-center gap-2 font-serif italic text-xs font-bold">
+                <div className={`w-2.5 h-2.5 rounded-full ${currentStatus.isUsingFallback ? 'bg-amber-500 animate-ping' : 'bg-emerald-500'}`} />
+                Status Atual: {currentStatus.isUsingFallback ? 'Modo Contingência Ativa' : 'MySQL Totalmente Online'}
+              </div>
+              <p className="text-[10px] text-gray-500 leading-relaxed font-sans">
+                {currentStatus.isUsingFallback 
+                  ? 'Como o MySQL remoto está offline ou as credenciais precisam ser corrigidas, o sistema está escrevendo dados localmente em fallback_db.json. Suas campanhas e questionários continuam funcionando perfeitamente.'
+                  : `Banco remoto conectado com velocidade ultra-rápida em ${currentStatus.host}.`
+                }
               </p>
             </div>
-          </div>
-        ) : errorMess ? (
-          <div className="flex-1 flex flex-col items-center justify-center py-14 text-center">
-            <div className="p-2.5 bg-[#FF6321]/10 text-[#FF6321] rounded-full mb-3.5 border border-[#FF6321]/20">
-              <HelpCircle className="w-6 h-6" />
-            </div>
-            <h5 className="font-serif text-sm font-bold text-[#FF6321] mb-1">Atenção</h5>
-            <p className="text-xs text-gray-500 max-w-md leading-relaxed italic">{errorMess}</p>
-            
-            {campaignLeads.length === 0 && (
-              <div className="mt-4 p-3 bg-[#F5F2ED] rounded-xl border border-[#E5E2DD] text-[11px] text-[#FF6321] flex items-center justify-center gap-1.5 max-w-sm font-serif italic shadow-inner">
-                💡 Dica: Dispare testes na aba "Simulador" para ver a IA!
+
+            {/* Detailed Auto-Diagnostic Panel wrapper */}
+            {currentStatus.isUsingFallback && currentStatus.error && (
+              <div className="p-4 rounded-xl border border-rose-200 bg-rose-50 text-rose-950 space-y-2">
+                <div className="flex items-center gap-1.5 font-bold text-[10.5px] uppercase tracking-wider text-rose-805">
+                  <AlertTriangle className="w-4 h-4 text-rose-600 animate-bounce" />
+                  Relatório Diagnóstico Inteligente
+                </div>
+                <p className="text-[10.5px] leading-relaxed font-medium font-sans">
+                  {currentStatus.error}
+                </p>
               </div>
             )}
           </div>
-        ) : aiResponse ? (
-          <div className="space-y-4">
-            <div className="flex items-center justify-between border-b border-[#E5E2DD] pb-3">
-              <span className="text-xs font-bold font-mono text-[#FF6321] uppercase tracking-widest flex items-center gap-2">
-                <MessageSquareCode className="w-4 h-4 text-[#FF6321]" />
-                Estudo de Copywriting Gerado com Sucesso
-              </span>
-              <button
-                onClick={copyResult}
-                className="text-xs text-[#FF6321] hover:text-[#FF6321]/90 flex items-center gap-1.5 cursor-pointer bg-[#FF6321]/5 border border-[#FF6321]/20 px-3.5 py-1.5 rounded-full hover:bg-[#FF6321]/15 transition-all font-serif italic font-semibold"
-              >
-                {copied ? (
-                  <>
-                    <Check className="w-4 h-4 text-emerald-600" />
-                    Copiado!
-                  </>
-                ) : (
-                  <>
-                    <Copy className="w-4 h-4" />
-                    Copiar Resultados
-                  </>
-                )}
-              </button>
-            </div>
+        </div>
 
-            {/* Rendered content */}
-            <div className="bg-[#F5F2ED]/40 border border-[#E5E2DD] rounded-2xl p-6 max-w-none shadow-inner">
-              {renderMarkdown(aiResponse)}
-            </div>
-          </div>
-        ) : (
-          <div className="flex-1 flex flex-col items-center justify-center py-16 text-center text-gray-400 font-serif italic">
-            <Sparkles className="w-12 h-12 text-gray-200 mb-3" />
-            <span className="text-sm font-semibold text-[#1A1A1A] mb-1">Pronto para criar copies de altíssimo impacto?</span>
-            <p className="text-xs text-gray-500 max-w-md leading-relaxed">
-              Clique no botão de geração no cabeçalho acima para que o Gemini leia todas as respostas e formate um copywriting poderoso.
+        {/* Informative tutorial panel for layman explanation */}
+        <div className="bg-[#1A1A1A] text-[#F5F2ED] border border-[#1A1A1A] p-6 rounded-2xl shadow-lg space-y-4">
+          <h4 className="font-serif italic font-bold text-xs text-[#FF6321] uppercase tracking-wider">Como o sistema funciona?</h4>
+          <div className="space-y-3.5 text-xs text-gray-300 leading-relaxed">
+            <p>
+              <strong>1. O Script Inteligente (Pixel):</strong> Cada campanha gerada te dá um pequeno código (script) para você colocar na sua Landing Page.
+            </p>
+            <p>
+              <strong>2. Monitoramento de Passos:</strong> Esse script funciona em segundo plano, observando se o visitante está rolando o seu site (scroll depth), clicando nos botões ou preenchendo o Quiz.
+            </p>
+            <p>
+              <strong>3. Armazenamento Blindado:</strong> Quando o visitante envia o Quiz e digita suas informações pessoais (nome, e-mail e idade), o script captura esses dados e envia para cá. Se o MySQL cair, o banco de segurança local retém imediatamente no arquivo interno de salvaguarda.
+            </p>
+            <p className="pt-2 text-gray-400 text-[10px] italic border-t border-white/5 flex items-center gap-1">
+              <Terminal className="w-3.5 h-3.5 text-[#FF6321]" /> Conectividade redundante inteligente ativa.
             </p>
           </div>
-        )}
+        </div>
+      </div>
+
+      {/* Right panel: Credential input form */}
+      <div className="lg:col-span-8 bg-white border border-[#E5E2DD] p-6 rounded-2xl shadow-sm text-[#1A1A1A] flex flex-col justify-between">
+        <div>
+          <div className="border-b border-[#E5E2DD] pb-4 mb-5">
+            <h3 className="font-serif text-base italic text-[#1A1A1A] font-bold">Credenciais do Servidor MySQL</h3>
+            <p className="text-xs text-gray-500 italic">Insira os parâmetros de host, porta, usuário e senha para conectar.</p>
+          </div>
+
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-bold text-[#1A1A1A]/80 mb-1.5">Host do Servidor MySQL</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Ex: 69.6.249.194"
+                  value={host}
+                  onChange={(e) => setHost(e.target.value)}
+                  className="w-full bg-[#F5F2ED] border border-[#E5E2DD] focus:border-[#FF6321] text-xs text-[#1A1A1A] rounded-xl px-4 py-2.5 outline-none transition-colors"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-[#1A1A1A]/80 mb-1.5">Porta</label>
+                <input
+                  type="number"
+                  required
+                  placeholder="Ex: 3306"
+                  value={port}
+                  onChange={(e) => setPort(parseInt(e.target.value, 10))}
+                  className="w-full bg-[#F5F2ED] border border-[#E5E2DD] focus:border-[#FF6321] text-xs text-[#1A1A1A] rounded-xl px-4 py-2.5 outline-none transition-colors"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-[#1A1A1A]/80 mb-1.5">Usuário MySQL</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Ex: fabios99_user"
+                  value={user}
+                  onChange={(e) => setUser(e.target.value)}
+                  className="w-full bg-[#F5F2ED] border border-[#E5E2DD] focus:border-[#FF6321] text-xs text-[#1A1A1A] rounded-xl px-4 py-2.5 outline-none transition-colors"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-[#1A1A1A]/80 mb-1.5">Banco de Dados (Schema Name)</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Ex: fabios99_dbname"
+                  value={database}
+                  onChange={(e) => setDatabase(e.target.value)}
+                  className="w-full bg-[#F5F2ED] border border-[#E5E2DD] focus:border-[#FF6321] text-xs text-[#1A1A1A] rounded-xl px-4 py-2.5 outline-none transition-colors"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-[#1A1A1A]/80 mb-1.5 flex items-center gap-1.5">
+                <Key className="w-3.5 h-3.5 text-[#FF6321]" />
+                Senha MySQL
+              </label>
+              <input
+                type="password"
+                placeholder="Insira a nova senha MySQL..."
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full bg-[#F5F2ED] border border-[#E5E2DD] focus:border-[#FF6321] text-xs text-[#1A1A1A] rounded-xl px-4 py-3 outline-none transition-colors"
+              />
+              <p className="text-[10px] text-gray-500 italic mt-1.5">
+                * Nota: Para manter seu status seguro, digite a nova senha apenas quando quiser alterá-la. Ganchos de segurança barram senhas mascaradas com asteriscos.
+              </p>
+            </div>
+
+            {saveResult && (
+              <div className={`p-4 rounded-xl border flex items-start gap-2.5 text-xs ${
+                saveResult.success 
+                  ? 'bg-emerald-50 text-emerald-800 border-emerald-200' 
+                  : 'bg-amber-50 text-amber-800 border-amber-200'
+              }`}>
+                {saveResult.success ? (
+                  <CheckCircle className="w-4 h-4 shrink-0 text-emerald-600 mt-0.5" />
+                ) : (
+                  <ShieldAlert className="w-4 h-4 shrink-0 text-amber-600 mt-0.5" />
+                )}
+                <span>{saveResult.message}</span>
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={saving}
+              className="w-full bg-[#1A1A1A] hover:bg-[#1A1A1A]/90 text-white font-semibold text-xs py-3 px-5 rounded-full transition-all flex items-center justify-center gap-2 cursor-pointer uppercase tracking-widest shadow-sm mt-3"
+            >
+              <Save className="w-4 h-4 text-[#FF6321]" />
+              {saving ? 'Testando e Salvando...' : 'Salvar Credenciais & Reconectar'}
+            </button>
+          </form>
+        </div>
       </div>
     </div>
   );
