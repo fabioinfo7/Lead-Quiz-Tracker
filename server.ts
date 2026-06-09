@@ -9,8 +9,12 @@ import {
   updateDbConfig, 
   getCampaigns, 
   createCampaign, 
+  updateCampaign,
+  deleteCampaign,
   getLeads, 
-  createLead, 
+  createLead,
+  updateLead,
+  deleteLead,
   trackEvent, 
   getAnalytics 
 } from './src/server-db';
@@ -42,16 +46,12 @@ app.post('/api/config', async (req, res) => {
   if (!host || !user || !database) {
     return res.status(400).json({ error: 'Campos host, user e database são obrigatórios.' });
   }
-  const success = await updateDbConfig({
-    host,
-    user,
-    database,
-    port: parseInt(port, 10) || 3306,
-    password
-  });
+  const success = await updateDbConfig({ host, user, database, port: parseInt(port, 10) || 3306, password });
   const status = getDbStatus();
   res.json({ success, status });
 });
+
+// ─── CAMPAIGNS ──────────────────────────────────────────────────────────────
 
 app.get('/api/campaigns', async (req, res) => {
   try {
@@ -68,12 +68,7 @@ app.post('/api/campaigns', async (req, res) => {
     return res.status(400).json({ error: 'Nome da campanha e nome do produto são obrigatórios.' });
   }
   const id = 'camp_' + Math.random().toString(36).substring(2, 9);
-  const newCampaign = {
-    id,
-    name,
-    product_name,
-    created_at: new Date().toISOString()
-  };
+  const newCampaign = { id, name, product_name, created_at: new Date().toISOString() };
   try {
     await createCampaign(newCampaign);
     res.json(newCampaign);
@@ -81,6 +76,32 @@ app.post('/api/campaigns', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+app.put('/api/campaigns/:id', async (req, res) => {
+  const { id } = req.params;
+  const { name, product_name } = req.body;
+  if (!name && !product_name) {
+    return res.status(400).json({ error: 'Pelo menos um campo (name ou product_name) é obrigatório.' });
+  }
+  try {
+    await updateCampaign(id, { name, product_name });
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/campaigns/:id', async (req, res) => {
+  const { id } = req.params;
+  try {
+    await deleteCampaign(id);
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── LEADS ───────────────────────────────────────────────────────────────────
 
 app.get('/api/leads', async (req, res) => {
   try {
@@ -91,24 +112,21 @@ app.get('/api/leads', async (req, res) => {
   }
 });
 
-// FIX: Endpoint de leads agora valida campaign_id contra campanhas existentes
 app.post('/api/leads', async (req, res) => {
   const { campaign_id, name, email, age, quiz_answers, session_id } = req.body;
   if (!campaign_id || !email) {
     return res.status(400).json({ error: 'campaign_id e email são obrigatórios.' });
   }
 
-  // FIX: Verifica se a campanha existe antes de gravar o lead
   try {
     const campaigns = await getCampaigns();
     const campaignExists = campaigns.some(c => c.id === campaign_id);
     if (!campaignExists) {
       return res.status(404).json({ 
-        error: `Campanha "${campaign_id}" não encontrada. Crie a campanha no painel antes de receber leads, e use o campaign_id gerado no pixel da landing page.` 
+        error: `Campanha "${campaign_id}" não encontrada. Crie a campanha no painel antes de receber leads.` 
       });
     }
   } catch (err: any) {
-    // Se não conseguir checar, continua mesmo assim (evita bloquear o lead)
     console.warn('[Leads] Não foi possível validar campaign_id:', err.message);
   }
 
@@ -125,7 +143,6 @@ app.post('/api/leads', async (req, res) => {
 
   try {
     await createLead(newLead);
-
     if (session_id) {
       await trackEvent({
         id: 'ev_' + Math.random().toString(36).substring(2, 11),
@@ -136,30 +153,53 @@ app.post('/api/leads', async (req, res) => {
         created_at: new Date().toISOString()
       });
     }
-
     res.json({ success: true, lead: newLead });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
+app.put('/api/leads/:id', async (req, res) => {
+  const { id } = req.params;
+  const { name, email, age } = req.body;
+  if (!name && !email && age === undefined) {
+    return res.status(400).json({ error: 'Pelo menos um campo é obrigatório.' });
+  }
+  try {
+    await updateLead(id, { name, email, age: age !== undefined ? parseInt(age, 10) : undefined });
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/leads/:id', async (req, res) => {
+  const { id } = req.params;
+  try {
+    await deleteLead(id);
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── ANALYTICS & TRACKING ────────────────────────────────────────────────────
+
 app.post('/api/track', async (req, res) => {
   const { campaign_id, event_type, scroll_percentage, session_id } = req.body;
   if (!campaign_id || !event_type || !session_id) {
     return res.status(400).json({ error: 'campaign_id, event_type e session_id são obrigatórios.' });
   }
-
-  const event = {
-    id: 'ev_' + Math.random().toString(36).substring(2, 11),
-    campaign_id,
-    event_type,
-    scroll_percentage: parseFloat(scroll_percentage) || 0,
-    session_id,
-    created_at: new Date().toISOString()
-  };
-
+  const eventId = 'ev_' + Math.random().toString(36).substring(2, 11);
   try {
-    await trackEvent(event);
+    await trackEvent({
+      id: eventId,
+      campaign_id,
+      event_type,
+      scroll_percentage: parseInt(scroll_percentage, 10) || 0,
+      session_id,
+      created_at: new Date().toISOString()
+    });
     res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -168,12 +208,14 @@ app.post('/api/track', async (req, res) => {
 
 app.get('/api/analytics', async (req, res) => {
   try {
-    const summary = await getAnalytics();
-    res.json(summary);
+    const analytics = await getAnalytics();
+    res.json(analytics);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
+
+// ─── AI ANALYSIS ─────────────────────────────────────────────────────────────
 
 app.post('/api/campaigns/:id/analyze', async (req, res) => {
   const campaignId = req.params.id;
@@ -188,10 +230,7 @@ app.post('/api/campaigns/:id/analyze', async (req, res) => {
     const campaignLeads = allLeads.filter(l => l.campaign_id === campaignId);
 
     if (campaignLeads.length === 0) {
-      return res.json({
-        canAnalyze: false,
-        message: 'Nenhum lead cadastrado nesta campanha para analisar ainda.'
-      });
+      return res.json({ canAnalyze: false, message: 'Nenhum lead cadastrado nesta campanha para analisar ainda.' });
     }
 
     let quizCompilationText = '';
@@ -256,11 +295,7 @@ Crie **5 modelos fortes de anúncios de alta conversão completos**.
 Formate toda a resposta em Markdown limpo e direto.
     `;
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.0-flash',
-      contents: prompt,
-    });
-
+    const response = await ai.models.generateContent({ model: 'gemini-2.0-flash', contents: prompt });
     res.json({ canAnalyze: true, analysis: response.text });
 
   } catch (err: any) {
@@ -269,7 +304,8 @@ Formate toda a resposta em Markdown limpo e direto.
   }
 });
 
-// FIX: Serve tanto /tracker.js quanto /pixel.js (ambos funcionam)
+// ─── GETLEAD TRACKER SCRIPT ──────────────────────────────────────────────────
+
 app.get(['/tracker.js', '/pixel.js'], (req, res) => {
   const cid = req.query.cid || '';
   const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'https';
@@ -277,7 +313,7 @@ app.get(['/tracker.js', '/pixel.js'], (req, res) => {
   
   res.setHeader('Content-Type', 'application/javascript');
   res.send(`/**
- * Lead Quiz Tracking script v1.2.0 — CORRIGIDO
+ * Lead Quiz Tracking script v2.0 — GetLead Compatible
  */
 (function() {
   var campaignId = "${cid}";
@@ -288,11 +324,13 @@ app.get(['/tracker.js', '/pixel.js'], (req, res) => {
     return;
   }
   
-  var sessionId = localStorage.getItem('lead_tracker_sess_id');
+  var sessionId = sessionStorage.getItem('lq_sid');
   if (!sessionId) {
-    sessionId = 'sess_' + Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
-    localStorage.setItem('lead_tracker_sess_id', sessionId);
+    sessionId = 'sess_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+    sessionStorage.setItem('lq_sid', sessionId);
   }
+  
+  function getUtm(k) { return new URLSearchParams(location.search).get(k) || ''; }
   
   function sendTrackEvent(type, payload) {
     fetch(serverUrl + '/api/track', {
@@ -304,9 +342,7 @@ app.get(['/tracker.js', '/pixel.js'], (req, res) => {
         session_id: sessionId,
         scroll_percentage: payload && payload.scroll_percentage ? payload.scroll_percentage : 0
       })
-    }).catch(function(e) {
-      console.warn('[Tracker] Falha no evento de tracking:', e);
-    });
+    }).catch(function(e) { console.warn('[Tracker] Evento falhou:', e); });
   }
   
   sendTrackEvent('visit');
@@ -328,24 +364,40 @@ app.get(['/tracker.js', '/pixel.js'], (req, res) => {
   });
   
   document.addEventListener('click', function(e) {
-    var element = e.target;
-    if (!element) return;
-    var isCta = element.closest('[data-tracker-cta]') || 
-                element.closest('#cta-button') || 
-                element.closest('.cta-button') || 
-                element.closest('a[href*="#quiz"]') || 
-                element.tagName === 'BUTTON';
-    if (isCta) {
+    var btn = e.target.closest('[data-gl-cta],[data-tracker-cta],#cta-button,.cta-button,a[href*="#quiz"]');
+    if (btn || e.target.tagName === 'BUTTON') {
       sendTrackEvent('cta_click');
     }
+  });
+
+  // Suporte ao formulário GetLead (id="quiz-form" ou data-gl-quiz)
+  document.addEventListener('submit', function(e) {
+    var form = e.target;
+    if (!form.matches('#quiz-form,.gl-quiz-form,[data-gl-quiz]')) return;
+    e.preventDefault();
+    var email = (form.querySelector('[name=email],[type=email]')?.value || '').trim();
+    var nome = (form.querySelector('[name=nome],[name=name]')?.value || '').trim();
+    var idade = (form.querySelector('[name=idade],[name=age]')?.value || '').trim();
+    var reservados = ['email', 'nome', 'name', 'idade', 'age'];
+    var quizAnswers = [];
+    new FormData(form).forEach(function(val, key) {
+      if (!reservados.includes(key.toLowerCase()) && key) {
+        quizAnswers.push({ question: key, answer: val });
+      }
+    });
+    window.LeadTracker.submitLead({
+      name: nome, email: email, age: parseInt(idade) || 0, quiz_answers: quizAnswers
+    }).then(function(res) {
+      if (res && res.success) {
+        console.log('[GetLead] Lead registrado!', res);
+        // Redirecionar após o envio: window.location.href = '/obrigado';
+      }
+    });
   });
   
   var previousLeadTracker = window.LeadTracker;
   window.LeadTracker = {
-    trackCta: function() {
-      sendTrackEvent('cta_click');
-    },
-    // FIX: submitLead agora inclui campaign_id automaticamente a partir do cid do pixel
+    trackCta: function() { sendTrackEvent('cta_click'); },
     submitLead: function(leadData) {
       return fetch(serverUrl + '/api/leads', {
         method: 'POST',
@@ -356,42 +408,36 @@ app.get(['/tracker.js', '/pixel.js'], (req, res) => {
           email: leadData.email,
           age: parseInt(leadData.age, 10) || 0,
           quiz_answers: leadData.quiz_answers || leadData.quizAnswers || [],
-          session_id: sessionId
+          session_id: sessionId,
+          utm_source: getUtm('utm_source'),
+          utm_medium: getUtm('utm_medium'),
+          utm_campaign: getUtm('utm_campaign')
         })
       })
       .then(function(r) { return r.json(); })
       .then(function(res) {
-        if (res.error) {
-          console.error('[Tracker] Erro ao salvar lead:', res.error);
-        } else {
-          sendTrackEvent('submit');
-          console.log('[Tracker] Lead salvo com sucesso!', res);
-        }
+        if (!res.error) sendTrackEvent('submit');
         return res;
       })
       .catch(function(err) {
-        console.error('[Tracker] Falha de rede ao salvar lead:', err);
+        console.error('[Tracker] Falha de rede:', err);
         throw err;
       });
     }
   };
 
-  // Processa fila de eventos emitidos antes do pixel carregar
   if (previousLeadTracker && previousLeadTracker._q) {
     previousLeadTracker._q.forEach(function(item) {
-      if (item.data) {
-        window.LeadTracker.submitLead(item.data)
-          .then(item.resolve)
-          .catch(item.reject);
-      } else if (item.type === 'cta') {
-        window.LeadTracker.trackCta();
-      }
+      if (item.data) window.LeadTracker.submitLead(item.data).then(item.resolve).catch(item.reject);
+      else if (item.type === 'cta') window.LeadTracker.trackCta();
     });
   }
   
-  console.log("[Tracker v1.2] Inicializado para campanha: " + campaignId + " | Server: " + serverUrl);
+  console.log("[Tracker v2.0 GetLead] Campanha: " + campaignId + " | Server: " + serverUrl);
 })();`);
 });
+
+// ─── SERVER START ─────────────────────────────────────────────────────────────
 
 async function startServer() {
   const success = await initDb();
