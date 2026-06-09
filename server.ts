@@ -41,6 +41,18 @@ app.get('/api/status', (req, res) => {
   res.json(status);
 });
 
+// Endpoint de diagnóstico — mostra o que o servidor enxerga (sem expor senha)
+app.get('/api/debug', (req, res) => {
+  const status = getDbStatus();
+  res.json({
+    ...status,
+    hasPassword: !!(status as any).password || 'verificar console do servidor',
+    node_env: process.env.NODE_ENV || 'não definido',
+    db_host_env: process.env.DB_HOST ? 'PRESENTE' : 'AUSENTE',
+    db_password_env: process.env.DB_PASSWORD ? 'PRESENTE' : 'AUSENTE',
+  });
+});
+
 app.post('/api/config', async (req, res) => {
   const { host, user, database, port, password } = req.body;
   if (!host || !user || !database) {
